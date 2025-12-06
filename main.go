@@ -223,6 +223,7 @@ func getAppointments(orgID int64, date string) ([]Appointment, error) {
 		       COALESCE(total_amount, 0), COALESCE(payment_method, ''), COALESCE(order_status, '')
 		FROM appointments
 		WHERE organization_id = $1 AND DATE(appointment_datetime) = $2
+		  AND (is_cancelled IS NULL OR is_cancelled = false)
 		ORDER BY master, appointment_datetime
 	`, orgID, date)
 	if err != nil {
