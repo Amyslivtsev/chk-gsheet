@@ -1,0 +1,25 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/amyslivtsev/chk-gsheet
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 8002
+
+env:
+  DATABASE_URL: "postgresql://parser_user:parser_secure_password@postgres_prod.default.svc.cluster.local:5432/sonline_parser?sslmode=disable"
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+imagePullSecrets:
+  - name: ghcr-secret
+
