@@ -1,0 +1,87 @@
+name: Build and Deploy chk-gsheet
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - 'helm/**'
+      - '.github/workflows/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get short SHA
+        id: sha
+        run: echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+
+      - name: Deploy to k3s
+        uses: appleboy/ssh-action@v1.0.0
+        env:
+          SHORT_SHA: ${{ steps.sha.outputs.SHORT_SHA }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: SHORT_SHA
+          script: |
+            echo "🚀 Deploying chk-gsheet (tag: main-${SHORT_SHA})..."
+            cd /tmp
+            rm -rf chk-gsheet-helm
+            git clone --depth 1 https://github.com/${{ github.repository }}.git chk-gsheet-helm
+            cd chk-gsheet-helm
+            helm upgrade --install chk-gsheet ./helm/chk-gsheet \
+              --namespace prod \
+              --create-namespace \
+              --set image.tag=main-${SHORT_SHA} \
+              --wait --timeout 120s
+            echo "✅ Deployed successfully"
+
