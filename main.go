@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -314,8 +315,7 @@ func exportToSheets(org *Organization, appointments []Appointment, date string) 
 		log.Printf("📋 Created new sheet '%s'", sheetName)
 	}
 
-	// 3. Prepare data grouped by master
-	// Group appointments by master
+	// 3. Group appointments by master
 	byMaster := make(map[string][]Appointment)
 	for _, apt := range appointments {
 		master := apt.Master
@@ -325,46 +325,155 @@ func exportToSheets(org *Organization, appointments []Appointment, date string) 
 		byMaster[master] = append(byMaster[master], apt)
 	}
 
-	// Build rows: Header per master + appointments
-	var values [][]interface{}
-	
-	// Header row
-	values = append(values, []interface{}{"Время", "Клиент", "Телефон", "Услуга", "Сумма", "Оплата", "Статус"})
+	// 4. Write date to B1
+	dateFormatted := parsedDate.Format("02.01.2006")
+	_, err = sheetsService.Spreadsheets.Values.Update(
+		org.SpreadsheetID,
+		fmt.Sprintf("'%s'!B1", sheetName),
+		&sheets.ValueRange{Values: [][]interface{}{{dateFormatted}}},
+	).ValueInputOption("USER_ENTERED").Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to write date: %w", err)
+	}
 
-	for master, apts := range byMaster {
-		// Master header row
-		values = append(values, []interface{}{""})
-		values = append(values, []interface{}{master, "", "", "", "", "", ""})
-		
-		for _, apt := range apts {
-			timeStr := apt.AppointmentDatetime.Format("15:04")
-			payment := formatPaymentMethod(apt.PaymentMethod)
-			values = append(values, []interface{}{
-				timeStr,
-				apt.ClientName,
-				apt.ClientPhone,
-				apt.Service,
-				apt.TotalAmount,
-				payment,
-				apt.OrderStatus,
-			})
+	// 5. Get masters list from organization (order matters)
+	masters, err := getMasters(org.ID)
+	if err != nil {
+		log.Printf("⚠️ Could not get masters list, using from appointments: %v", err)
+		// Fallback: use masters from appointments
+		for m := range byMaster {
+			masters = append(masters, m)
 		}
 	}
 
-	// 4. Write data to sheet
-	writeRange := fmt.Sprintf("'%s'!A1", sheetName)
-	valueRange := &sheets.ValueRange{
-		Values: values,
-	}
+	// 6. Write data for each master
+	// Each master block is 14 columns wide (B-O, P-AC, AD-AQ...)
+	// Master 0: starts at column B (index 1)
+	// Master 1: starts at column P (index 15)
+	// Master N: starts at column 1 + N*14
+	const masterBlockWidth = 14
+	const startCol = 1 // Column B (0-indexed: A=0, B=1)
+	const dataStartRow = 4
+	const dataEndRow = 27
+	const maxRecordsPerMaster = dataEndRow - dataStartRow + 1 // 24 records
 
-	_, err = sheetsService.Spreadsheets.Values.Update(
-		org.SpreadsheetID, writeRange, valueRange,
-	).ValueInputOption("USER_ENTERED").Context(ctx).Do()
-	if err != nil {
-		return "", fmt.Errorf("failed to write data: %w", err)
+	totalWritten := 0
+
+	for masterIdx, masterName := range masters {
+		apts, ok := byMaster[masterName]
+		if !ok {
+			continue // No appointments for this master
+		}
+
+		// Calculate column offset for this master
+		colOffset := startCol + masterIdx*masterBlockWidth
+
+		// Write master name to row 2
+		masterNameCell := fmt.Sprintf("'%s'!%s2", sheetName, colToLetter(colOffset))
+		_, err = sheetsService.Spreadsheets.Values.Update(
+			org.SpreadsheetID,
+			masterNameCell,
+			&sheets.ValueRange{Values: [][]interface{}{{masterName}}},
+		).ValueInputOption("USER_ENTERED").Context(ctx).Do()
+		if err != nil {
+			log.Printf("⚠️ Failed to write master name: %v", err)
+		}
+
+		// Prepare data arrays
+		var timeValues [][]interface{}
+		var sumValues [][]interface{}
+		var paymentValues [][]interface{}
+
+		for i, apt := range apts {
+			if i >= maxRecordsPerMaster {
+				break // Max 24 records per master
+			}
+			timeStr := apt.AppointmentDatetime.Format("15:04")
+			payment := formatPaymentMethod(apt.PaymentMethod)
+
+			timeValues = append(timeValues, []interface{}{timeStr})
+			sumValues = append(sumValues, []interface{}{apt.TotalAmount})
+			paymentValues = append(paymentValues, []interface{}{payment})
+			totalWritten++
+		}
+
+		// Write time (column offset + 0)
+		if len(timeValues) > 0 {
+			timeRange := fmt.Sprintf("'%s'!%s%d:%s%d", sheetName,
+				colToLetter(colOffset), dataStartRow,
+				colToLetter(colOffset), dataStartRow+len(timeValues)-1)
+			_, err = sheetsService.Spreadsheets.Values.Update(
+				org.SpreadsheetID, timeRange,
+				&sheets.ValueRange{Values: timeValues},
+			).ValueInputOption("USER_ENTERED").Context(ctx).Do()
+			if err != nil {
+				log.Printf("⚠️ Failed to write time: %v", err)
+			}
+		}
+
+		// Write sum (column offset + 2, i.e. D for master 0)
+		if len(sumValues) > 0 {
+			sumRange := fmt.Sprintf("'%s'!%s%d:%s%d", sheetName,
+				colToLetter(colOffset+2), dataStartRow,
+				colToLetter(colOffset+2), dataStartRow+len(sumValues)-1)
+			_, err = sheetsService.Spreadsheets.Values.Update(
+				org.SpreadsheetID, sumRange,
+				&sheets.ValueRange{Values: sumValues},
+			).ValueInputOption("USER_ENTERED").Context(ctx).Do()
+			if err != nil {
+				log.Printf("⚠️ Failed to write sum: %v", err)
+			}
+		}
+
+		// Write payment method (column offset + 10, i.e. L for master 0)
+		if len(paymentValues) > 0 {
+			paymentRange := fmt.Sprintf("'%s'!%s%d:%s%d", sheetName,
+				colToLetter(colOffset+10), dataStartRow,
+				colToLetter(colOffset+10), dataStartRow+len(paymentValues)-1)
+			_, err = sheetsService.Spreadsheets.Values.Update(
+				org.SpreadsheetID, paymentRange,
+				&sheets.ValueRange{Values: paymentValues},
+			).ValueInputOption("USER_ENTERED").Context(ctx).Do()
+			if err != nil {
+				log.Printf("⚠️ Failed to write payment: %v", err)
+			}
+		}
+
+		log.Printf("📝 Master '%s': wrote %d appointments", masterName, len(apts))
 	}
 
 	return sheetName, nil
+}
+
+// colToLetter converts 0-indexed column number to letter (0=A, 1=B, 26=AA)
+func colToLetter(col int) string {
+	result := ""
+	for col >= 0 {
+		result = string(rune('A'+col%26)) + result
+		col = col/26 - 1
+	}
+	return result
+}
+
+// getMasters gets ordered list of masters for organization
+func getMasters(orgID int64) ([]string, error) {
+	var mastersStr string
+	err := db.QueryRow(`
+		SELECT COALESCE(array_to_string(masters, ','), '')
+		FROM organizations WHERE id = $1
+	`, orgID).Scan(&mastersStr)
+	if err != nil {
+		return nil, err
+	}
+
+	var masters []string
+	for _, m := range strings.Split(mastersStr, ",") {
+		m = strings.TrimSpace(m)
+		if m != "" {
+			masters = append(masters, m)
+		}
+	}
+	return masters, nil
 }
 
 func formatPaymentMethod(method string) string {
