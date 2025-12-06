@@ -63,25 +63,23 @@ jobs:
         id: sha
         run: echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
 
-      - name: Deploy to k3s
-        uses: appleboy/ssh-action@v1.0.0
-        env:
-          SHORT_SHA: ${{ steps.sha.outputs.SHORT_SHA }}
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: SHORT_SHA
-          script: |
-            echo "🚀 Deploying chk-gsheet (tag: main-${SHORT_SHA})..."
-            cd /tmp
-            rm -rf chk-gsheet-helm
-            git clone --depth 1 https://github.com/${{ github.repository }}.git chk-gsheet-helm
-            cd chk-gsheet-helm
-            helm upgrade --install chk-gsheet ./helm/chk-gsheet \
-              --namespace prod \
-              --create-namespace \
-              --set image.tag=main-${SHORT_SHA} \
-              --wait --timeout 120s
-            echo "✅ Deployed successfully"
+          version: 'latest'
 
+      - name: Setup kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy with Helm
+        run: |
+          echo "🚀 Deploying chk-gsheet (tag: main-${{ steps.sha.outputs.SHORT_SHA }})..."
+          helm upgrade --install chk-gsheet ./helm/chk-gsheet \
+            --namespace prod \
+            --create-namespace \
+            --set image.tag=main-${{ steps.sha.outputs.SHORT_SHA }} \
+            --wait --timeout 120s
+          echo "✅ Deployed successfully"
