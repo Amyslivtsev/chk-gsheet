@@ -294,7 +294,7 @@ func exportToSheets(org *Organization, appointments []Appointment, date string) 
 		}
 		targetSheetID = copyResp.SheetId
 
-		// Rename the copied sheet
+		// Rename the copied sheet and move to first position
 		renameReq := &sheets.BatchUpdateSpreadsheetRequest{
 			Requests: []*sheets.Request{
 				{
@@ -302,8 +302,9 @@ func exportToSheets(org *Organization, appointments []Appointment, date string) 
 						Properties: &sheets.SheetProperties{
 							SheetId: targetSheetID,
 							Title:   sheetName,
+							Index:   0, // Move to first position (leftmost)
 						},
-						Fields: "title",
+						Fields: "title,index",
 					},
 				},
 			},
@@ -312,7 +313,7 @@ func exportToSheets(org *Organization, appointments []Appointment, date string) 
 		if err != nil {
 			return "", fmt.Errorf("failed to rename sheet: %w", err)
 		}
-		log.Printf("📋 Created new sheet '%s'", sheetName)
+		log.Printf("📋 Created new sheet '%s' at position 0", sheetName)
 	}
 
 	// 3. Group appointments by master
@@ -478,14 +479,18 @@ func getMasters(orgID int64) ([]string, error) {
 
 func formatPaymentMethod(method string) string {
 	switch method {
+	case "acquiring":
+		return "Эквайринг"
 	case "cash":
 		return "Наличные"
-	case "card":
-		return "Карта"
-	case "transfer":
-		return "Перевод"
+	case "transfer_admin":
+		return "Перевод Админу"
+	case "transfer_master":
+		return "Перевод Мастеру"
+	case "transfer_owner":
+		return "Перевод Владельцу"
 	default:
-		return "Не указан"
+		return "" // Пустая строка - оставляем dropdown как есть
 	}
 }
 
