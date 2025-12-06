@@ -44,3 +44,4 @@ kubectl create secret generic google-credentials \
   -n prod
 ```
 
+# rebuild
