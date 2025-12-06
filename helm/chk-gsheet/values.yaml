@@ -10,7 +10,7 @@ service:
   port: 8002
 
 env:
-  DATABASE_URL: "postgresql://parser_user:parser_secure_password@postgres_prod.default.svc.cluster.local:5432/sonline_parser?sslmode=disable"
+  DATABASE_URL: "postgresql://parser_user:parser_secure_password@46.17.41.146:5432/sonline_parser?sslmode=disable"
 
 resources:
   limits:
