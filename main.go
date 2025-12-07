@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -457,7 +458,7 @@ func colToLetter(col int) string {
 	return result
 }
 
-// getMasters gets ordered list of masters for organization
+// getMasters gets alphabetically sorted list of masters for organization
 func getMasters(orgID int64) ([]string, error) {
 	var mastersStr string
 	err := db.QueryRow(`
@@ -475,6 +476,7 @@ func getMasters(orgID int64) ([]string, error) {
 			masters = append(masters, m)
 		}
 	}
+	sort.Strings(masters) // Alphabetical order
 	return masters, nil
 }
 
